@@ -1,7 +1,7 @@
 # CoreTracer
 
 Welcome to CoreTracer! A package for tracing Go applications, re-invented with all recent insights on metrics collection and tracing.
-It is a spiritual successor of https://github.com/InjectiveLabs/metrics, but we omit the "metrics" part to fully focus on tracing.
+It is a spiritual successor of [InjectiveLabs/metrics](https://github.com/InjectiveLabs/metrics), [xlab/statsd_metrics](https://github.com/xlab/statsd_metrics), but we omit the "metrics" part to fully focus on tracing.
 
 Certain concepts are borrowed from the `metrics` package, but its API is redesigned to have very minimal surface and internal processing
 to leverage most of the [OpenTraicing](https://opentracing.io).
@@ -71,12 +71,12 @@ func (s *MyService) SomeOtherFunc(ctx context.Context) {
 - `coretracer.Tags` is used to add tags to the trace span
 
 The line `defer coretracer.Trace(&ctx)()` unfolds into the following runtime actions:
-* `Trace()` returns a `type SpanEnder func()` that ends span with a success and records the duration.
+* `Trace()` returns a `type SpanEnderFn func()` that ends span with a success and records the duration.
 * The end function is called when the method returns, so it's `defer`red.
 * We pass a pointer to the context inteface (`*context.Context`), so the context can be updated with the span data in-place.
 * The context is enriched with the span reference, so we can call `coretracer.TraceError` on the same context later.
 * Ending the span with `TraceError` will mark it as failed and add the error to the span, but also tombstone the context.
-* If the span ended with an error (and context is tombstoned), execution of the deferred `SpanEnder` function will be no-op.
+* If the span ended with an error (and context is tombstoned), execution of the deferred `SpanEnderFn` function will be no-op.
 * If user calls `TraceError` on a tombstoned context, it will emit a warning with a stacktrace in the logs, considered a programming error.
 * Context could be a Cosmos SDK context, in that case the real Go context will be replaced in-place for `ctx.Context()`.
 * Passing `nil` context will emit a warning with a stacktrace in the logs, considered a programming error. Falls back to `Traceless` (see below).
@@ -183,7 +183,7 @@ func NewMyService() *MyService {
 }
 
 func (s *MyService) SomeFuncWithoutContext() error {
-    defer coretracer.Traceless(s.svcTags)()
+    defer coretracer.Traceless(nil, s.svcTags)()
 
     // do a subcall
     s.SomeOtherFuncWithoutContext()
@@ -193,7 +193,7 @@ func (s *MyService) SomeFuncWithoutContext() error {
 
 
 func (s *MyService) SomeOtherFuncWithoutContext() {
-    defer coretracer.Traceless(s.svcTags)()
+    defer coretracer.Traceless(nil, s.svcTags)()
     // do something
 }
 ```

@@ -1,0 +1,188 @@
+package stackcache
+
+import (
+	"go/token"
+	"runtime"
+	"strings"
+	"sync"
+)
+
+type StackCache interface {
+	GetCaller() runtime.Frame
+	GetStackFrames() []runtime.Frame
+}
+
+// New creates a new stack cache for effectively traversing runtime frame stack.
+// The traverser will start at pcOffset and move until not exited from runtime internal
+// packages of the output library. pcSkip frames will be cut to avoid reporting
+// the middleware layers.
+func New(pcSearchOffset, pcSkip int, breakpointPackage string) StackCache {
+	return &stackCache{
+		minimumCallerDepth: pcSearchOffset,
+		maximumCallerDepth: 50,
+		callerSkipFrames:   pcSkip,
+		breakpointPackage:  breakpointPackage,
+	}
+}
+
+type stackCache struct {
+	// breakpointPackage is a package name that stack traverser will seek,
+	// so it could ignore frames upon finding the first frame after that package.
+	breakpointPackage string
+
+	offsetOnce         sync.Once
+	offsetIsSet        bool
+	minimumCallerDepth int
+	maximumCallerDepth int
+	callerSkipFrames   int
+}
+
+// runtimePkgNames is a list of packages that are considered runtime internal and should be skipped once reached.
+var runtimePkgNames = map[string]bool{
+	"runtime": true,
+	"testing": true,
+}
+
+// GetCaller retrieves the name of the first function from a non-runtime internal package.
+// That would be our caller. Actually, may skip up to callerSkipFrames.
+func (c *stackCache) GetCaller() runtime.Frame {
+	pcs := make([]uintptr, c.maximumCallerDepth)
+	depth := runtime.Callers(c.minimumCallerDepth, pcs)
+	frames := runtime.CallersFrames(pcs[:depth])
+	skip := c.callerSkipFrames
+
+	var (
+		offset      int
+		latestFrame runtime.Frame
+	)
+
+	for f, again := frames.Next(); again; f, again = frames.Next() {
+		pkg := PackageName(f.Function)
+
+		if !c.offsetIsSet {
+			if pkg == c.breakpointPackage {
+				c.offsetOnce.Do(func() {
+					c.minimumCallerDepth += offset
+					c.offsetIsSet = true
+				})
+			}
+		} else if pkg != c.breakpointPackage {
+			if runtimePkgNames[pkg] {
+				break
+			}
+
+			if skip != 0 {
+				skip--
+				continue
+			}
+
+			latestFrame = f
+			break
+		}
+
+		latestFrame = f
+		offset++
+	}
+
+	return latestFrame
+}
+
+// GetStackFrames retrieves the full stack since first non-internal package.
+func (c *stackCache) GetStackFrames() []runtime.Frame {
+	pcs := make([]uintptr, c.maximumCallerDepth)
+	depth := runtime.Callers(c.minimumCallerDepth, pcs)
+	frames := runtime.CallersFrames(pcs[:depth])
+	usefulStackFrames := make([]runtime.Frame, 0, depth)
+
+	var (
+		offset      int
+		latestFrame runtime.Frame
+		latestPkg   string
+	)
+
+	for f, again := frames.Next(); again; f, again = frames.Next() {
+		pkg := PackageName(f.Function)
+
+		if !c.offsetIsSet {
+			if pkg == c.breakpointPackage {
+				c.offsetOnce.Do(func() {
+					c.minimumCallerDepth += offset
+					c.offsetIsSet = true
+				})
+			}
+		} else if pkg != c.breakpointPackage {
+			if runtimePkgNames[pkg] && latestPkg == c.breakpointPackage {
+				usefulStackFrames = append(usefulStackFrames, latestFrame)
+			}
+			usefulStackFrames = append(usefulStackFrames, f)
+			latestPkg = pkg
+			continue
+		}
+
+		latestFrame = f
+		latestPkg = pkg
+		offset++
+	}
+
+	if c.callerSkipFrames > 0 && len(usefulStackFrames) >= c.callerSkipFrames {
+		usefulStackFrames = usefulStackFrames[c.callerSkipFrames:]
+	}
+
+	return usefulStackFrames
+}
+
+// PackageName reduces a fully qualified function name to the package name
+// This function is from logrus internals.
+func PackageName(path string) string {
+	for {
+		lastPeriod := strings.LastIndex(path, ".")
+		lastSlash := strings.LastIndex(path, "/")
+
+		if lastPeriod > lastSlash {
+			path = path[:lastPeriod]
+		} else {
+			break
+		}
+	}
+
+	return path
+}
+
+// FuncName reduces a fully qualified function name to the function name
+func FuncName(path string) string {
+	parts := strings.Split(path, "/")
+	nameParts := strings.Split(parts[len(parts)-1], ".")
+	lastPart := nameParts[len(nameParts)-1]
+
+	if isValidFuncName(lastPart) {
+		return lastPart
+	}
+
+	for i := 1; i <= len(nameParts)-1; i++ {
+		lastPart = nameParts[len(nameParts)-1-i] + "." + lastPart
+		if isValidFuncName(lastPart) {
+			return lastPart
+		}
+	}
+
+	// last part of the path fully
+	return parts[len(parts)-1]
+}
+
+// isValidFuncName checks if the given name is a valid function name in Go using ASCII range checks.
+func isValidFuncName(name string) bool {
+	if len(name) == 0 {
+		return false
+	}
+
+	// Check if the first character is a letter (A-Z, a-z) or an underscore (_)
+	firstChar := name[0]
+	if !((firstChar >= 'A' && firstChar <= 'Z') || (firstChar >= 'a' && firstChar <= 'z') || firstChar == '_') {
+		return false
+	}
+
+	// Skip checking the rest of the characters
+
+	// Ensure it's not a Go keyword
+	return !token.Lookup(name).IsKeyword()
+}

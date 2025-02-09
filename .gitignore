@@ -1,0 +1,11 @@
+.DS_Store
+.code
+.vscode
+.cursor
+.cursorrules
+
+coverage.out
+coverage.html
+
+.env
+.env.local
