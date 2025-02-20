@@ -16,7 +16,7 @@ func newSafeMap() SafeMap {
 	}
 }
 
-func newSafeMapWith(k, v string) SafeMap {
+func newSafeMapWith(k string, v any) SafeMap {
 	return SafeMap{
 		mux: new(sync.RWMutex),
 		m: map[string]any{

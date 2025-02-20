@@ -6,10 +6,16 @@ import (
 )
 
 type Config struct {
-	Enabled              bool
-	EnvName              string
-	StuckFunctionTimeout time.Duration
-	Logger               BasicLogger
+	Enabled               bool
+	EnvName               string
+	ServiceName           string
+	ServiceVersion        string
+	ChainID               string
+	CollectorDSN          string
+	CollectorSecureSSL    bool
+	StuckFunctionWatchdog bool
+	StuckFunctionTimeout  time.Duration
+	Logger                BasicLogger
 }
 
 type BasicLogger interface {
@@ -28,7 +34,19 @@ func (c *Config) GlobalTagsMap() map[string]string {
 	globalTags := make(map[string]string, 1)
 
 	if len(c.EnvName) > 0 {
-		globalTags["env"] = c.EnvName
+		globalTags["deployment.environment"] = c.EnvName
+	}
+
+	if len(c.ChainID) > 0 {
+		globalTags["deployment.chain_id"] = c.ChainID
+	}
+
+	if len(c.ServiceName) > 0 {
+		globalTags["service.name"] = c.ServiceName
+	}
+
+	if len(c.ServiceVersion) > 0 {
+		globalTags["service.version"] = c.ServiceVersion
 	}
 
 	return globalTags
@@ -50,6 +68,18 @@ func validateConfig(cfg *Config) *Config {
 
 	if len(cfg.EnvName) == 0 {
 		cfg.EnvName = "local"
+	}
+
+	if len(cfg.ServiceName) == 0 {
+		cfg.ServiceName = "unknown"
+	}
+
+	if len(cfg.ServiceVersion) == 0 {
+		cfg.ServiceVersion = "dev"
+	}
+
+	if len(cfg.ChainID) == 0 {
+		cfg.ChainID = "localnet-1337"
 	}
 
 	if cfg.Logger == nil {

@@ -26,8 +26,14 @@ func NewTags(mapsToUnion ...map[string]any) Tags {
 	return Tags(safeMap)
 }
 
+// NewTag creates a new tag with the given key and value.
+// It is a shortcut for `NewTags(map[string]any{k: v})`.
+func NewTag(k string, v any) Tags {
+	return Tags(newSafeMapWith(k, v))
+}
+
 // With adds a new tag to the set. It will modify the existing set.
-func (t Tags) With(k, v string) Tags {
+func (t Tags) With(k string, v any) Tags {
 	if t.mux == nil {
 		return Tags(newSafeMapWith(k, v))
 	}

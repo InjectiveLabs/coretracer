@@ -19,12 +19,6 @@ https://newrelic.com/blog/nerdlog/transforming-traces
 
 [<img src="https://newrelic.com/sites/default/files/styles/1800w/public/2024-03/connector.webp?itok=fkc8qH1S" alt="Transforming Traces into Metrics" width="600" />](https://newrelic.com/blog/nerdlog/transforming-traces)
 
-## Future Goals
-
-- Forward traces to Uptrace, Datadog, etc
-- Transform traces into metrics
-- Export metrics to InfluxDB, Grafana
-
 ## Basic Usage
 
 ```go
@@ -37,9 +31,7 @@ type MyService struct {
 
 func NewMyService() *MyService {
     return &MyService{
-        svcTags: coretracer.Tags{
-            "svc": "myService",
-        },
+        svcTags: coretracer.NewTag("svc", "myService"),
     }
 }
 
@@ -69,6 +61,8 @@ func (s *MyService) SomeOtherFunc(ctx context.Context) {
 - `coretracer.Trace` is used to initiate a span within a service method
 - `coretracer.TraceError` is used to end span, add the error and mark span as failed
 - `coretracer.Tags` is used to add tags to the trace span
+- `coretracer.NewTag` is a shortcut for `coretracer.NewTags`
+- `coretracer.WithTags` can add more tags to the existing span.
 
 The line `defer coretracer.Trace(&ctx)()` unfolds into the following runtime actions:
 * `Trace()` returns a `type SpanEnderFn func()` that ends span with a success and records the duration.
@@ -104,15 +98,11 @@ It allows to keep a single return value of `coretracer.Trace` that can be used t
 `coretracer.Tags` provides a way to add additional tags to the span. Note that tags for the span are managed before span is created.
 
 ```go
-svcTags := coretracer.Tags{
-    "svc": "myService",
-}
+svcTags := coretracer.NewTag("svc", "myService")
 
-additonalTags := svcTags.WithTags(coretracer.Tags{ 
-    "block_height": 3245674,
-})
+additionalTags := svcTags.WithTags(coretracer.NewTag("block_height", 3245674))
 
-defer coretracer.Trace(&ctx, additonalTags)()
+defer coretracer.Trace(&ctx, additionalTags)()
 ```
 
 Sometimes tags only known at certain point of the span execution, so we can use `WithTags` to add them.
@@ -126,12 +116,10 @@ defer coretracer.Trace(&ctx, svcTags)()
 
 // much later
 
-additonalTags := coretracer.Tags{ 
-    "block_height": 3245674,
-}
+additionalTags := coretracer.NewTag("block_height", 3245674)
 
 // coretracer.WithTags will fetch the span from the context and add tags to it
-coretracer.WithTags(ctx, additonalTags)
+coretracer.WithTags(ctx, additionalTags)
 ```
 
 ## Usage with Closures (anonymous functions)
@@ -150,9 +138,7 @@ func SomeFunc(ctx context.Context) {
     }()
 
     // ctx here holds the span of SomeFunc
-    coretracer.WithTags(ctx, coretracer.Tags{ 
-        "is_goroutine": false,
-    })
+    coretracer.WithTags(ctx, coretracer.NewTag("is_goroutine", false))
 }
 ```
 
@@ -176,9 +162,7 @@ type MyService struct {
 
 func NewMyService() *MyService {
     return &MyService{
-        svcTags: coretracer.Tags{
-            "svc": "myService",
-        },
+        svcTags: coretracer.NewTag("svc", "myService"),
     }
 }
 
@@ -212,9 +196,7 @@ func (s *MyService) SomeFuncWithoutContext() error {
         defer coretracer.TracelessWithName(&ctx, "SomeOtherFuncGoroutine", s.svcTags)()
 
         // do stuff
-        coretracer.WithTags(ctx, coretracer.Tags{ 
-            "is_goroutine": true,
-        })
+        coretracer.WithTags(ctx, coretracer.NewTag("is_goroutine", true))
     }()
     
     return nil
@@ -233,6 +215,8 @@ Traceless won't care about the context that is `nil`. It will just create a span
 * `coretracer.TraceWithName` is used to trace an anonymous closure with a given name.
 * `coretracer.TracelessWithName` is used to trace an anonymous closure without a context, with a given name.
 * `coretracer.Tags` is used to add tags to the span.
+* `coretracer.NewTags` is used to create a new set of tags.
+* `coretracer.NewTag` is a shortcut for `coretracer.NewTags`
 * `coretracer.WithTags` can add more tags to the existing span.
 * `coretracer.TraceError` is used to end span, set the error and mark span as failed.
 
@@ -242,6 +226,14 @@ They're designed to have very little overhead in terms of line code and runtime 
 If tracing is disabled, all tracing functions are no-op and should not affect the runtime performance. Including the tags management - tag joins are heavy on GC if used in hot paths. So `WithTags` will no-op.
 
 When enbled, the tracing info will be processed with OTal config and client and will be sent to the collecting backend.
+
+## Example
+
+```bash
+cd example && go run main.go
+```
+
+Refer to the example's [main.go](example/main.go) for more details. The example will output the traces to local [SigNoz](https://signoz.io/docs/install/docker/) instance.
 
 ## Tracing Config for OTel
 
