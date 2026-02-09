@@ -41,7 +41,7 @@ func TestGlobalTagsMap(t *testing.T) {
 	globalTags := cfg.GlobalTagsMap()
 
 	require.Len(t, globalTags, 1, "Expected 1 global tag")
-	require.Equal(t, "staging", globalTags["env"], "Expected global tag 'env' to be 'staging'")
+	require.Equal(t, "staging", globalTags["deployment.environment"], "Expected global tag 'deployment.environment' to be 'staging'")
 }
 
 func TestGlobalTagsMap_NilConfig(t *testing.T) {
@@ -49,6 +49,9 @@ func TestGlobalTagsMap_NilConfig(t *testing.T) {
 
 	globalTags := cfg.GlobalTagsMap()
 
-	require.Len(t, globalTags, 1, "Expected 1 global tag")
-	require.Equal(t, "local", globalTags["env"], "Expected global tag 'env' to be 'local'")
+	require.Len(t, globalTags, 4, "Expected 4 global tags")
+	require.Equal(t, "local", globalTags["deployment.environment"], "Expected global tag 'deployment.environment' to be 'local'")
+	require.Equal(t, "unknown", globalTags["service.name"], "Expected global tag 'service.name' to be 'unknown'")
+	require.Equal(t, "dev", globalTags["service.version"], "Expected global tag 'service.version' to be 'dev'")
+	require.Equal(t, "svc-us-east", globalTags["deployment.cluster_id"], "Expected global tag 'deployment.cluster_id' to be 'svc-us-east'")
 }

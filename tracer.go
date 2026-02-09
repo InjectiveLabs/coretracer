@@ -2,7 +2,7 @@ package coretracer
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"sync"
 
 	otel "go.opentelemetry.io/otel"
@@ -24,7 +24,7 @@ type (
 type Tracer interface {
 	Trace(ctx *context.Context, tags ...Tags) SpanEnderFn
 	TraceWithName(ctx *context.Context, name string, tags ...Tags) SpanEnderFn
-	TraceError(ctx context.Context, err error)
+	TraceError(ctx context.Context, err error, tags ...Tags)
 	Traceless(ctx *context.Context, tags ...Tags) SpanEnderFn
 	TracelessWithName(ctx *context.Context, name string, tags ...Tags) SpanEnderFn
 
@@ -40,12 +40,12 @@ func Enable(cfg *Config, exporterInitFn func(cfg *Config) ExporterShutdownFn) {
 	exporterShutdownFn = exporterInitFn(cfg)
 
 	if exporterShutdownFn == nil {
-		log.Println("[WARN] CoreTracer Failed to enable tracer")
+		slog.Warn("coretracer: failed to enable tracer")
 		return
 	}
 
 	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) {
-		cfg.Logger.Printf("[WARN] CoreTracer Otel Tracer error: %v", err)
+		cfg.Logger.Warn("coretracer: otel tracer error", "error", err)
 	}))
 
 	tracer = newOtelTracer(cfg)
@@ -59,7 +59,7 @@ func Disable() {
 		tracer.Close()
 
 		if err := exporterShutdownFn(context.Background()); err != nil {
-			log.Println("[ERR] CoreTracer Failed to shutdown exporter", err)
+			slog.Error("coretracer: failed to shutdown exporter", "error", err)
 		}
 	}
 
@@ -93,14 +93,14 @@ func TraceWithName(ctx *context.Context, name string, tags ...Tags) SpanEnderFn 
 	return tracer.TraceWithName(ctx, name, tags...)
 }
 
-func TraceError(ctx context.Context, err error) {
+func TraceError(ctx context.Context, err error, tags ...Tags) {
 	tracerMux.RLock()
 	defer tracerMux.RUnlock()
 	if tracer == nil {
 		return
 	}
 
-	tracer.TraceError(ctx, err)
+	tracer.TraceError(ctx, err, tags...)
 }
 
 func Traceless(ctx *context.Context, tags ...Tags) SpanEnderFn {
@@ -154,6 +154,6 @@ func Close() {
 	tracer = nil
 
 	if err := exporterShutdownFn(context.Background()); err != nil {
-		log.Println("[ERR] CoreTracer Failed to shutdown exporter", err)
+		slog.Error("coretracer: failed to shutdown exporter", "error", err)
 	}
 }

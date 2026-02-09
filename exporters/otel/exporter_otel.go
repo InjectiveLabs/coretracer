@@ -2,7 +2,7 @@ package otel
 
 import (
 	"context"
-	"log"
+	"log/slog"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -25,15 +25,21 @@ func InitExporter(cfg *coretracer.Config) coretracer.ExporterShutdownFn {
 		secureOption = otlptracegrpc.WithInsecure()
 	}
 
+	clientOpts := []otlptracegrpc.Option{
+		secureOption,
+		otlptracegrpc.WithEndpoint(cfg.CollectorDSN),
+	}
+
+	if len(cfg.CollectorHeaders) > 0 {
+		clientOpts = append(clientOpts, otlptracegrpc.WithHeaders(cfg.CollectorHeaders))
+	}
+
 	exporter, err := otlptrace.New(
 		context.Background(),
-		otlptracegrpc.NewClient(
-			secureOption,
-			otlptracegrpc.WithEndpoint(cfg.CollectorDSN),
-		),
+		otlptracegrpc.NewClient(clientOpts...),
 	)
 	if err != nil {
-		log.Printf("[WARN] Otel Exporter: Failed to create exporter: %v", err)
+		slog.Warn("coretracer: otel exporter: failed to create exporter", "error", err)
 		return emptyShutdownFn()
 	}
 
@@ -43,11 +49,11 @@ func InitExporter(cfg *coretracer.Config) coretracer.ExporterShutdownFn {
 			attribute.String("service.name", cfg.ServiceName),
 			attribute.String("service.version", cfg.ServiceVersion),
 			attribute.String("deployment.environment", cfg.EnvName),
-			attribute.String("deployment.chain_id", cfg.ChainID),
+			attribute.String("deployment.cluster_id", cfg.ClusterID),
 		),
 	)
 	if err != nil {
-		log.Printf("[WARN] Otel Exporter: Could not set resources: %v", err)
+		slog.Warn("coretracer: otel exporter: could not set resources", "error", err)
 		return emptyShutdownFn()
 	}
 
@@ -61,7 +67,7 @@ func InitExporter(cfg *coretracer.Config) coretracer.ExporterShutdownFn {
 
 	return func(ctx context.Context) error {
 		if err := traceProvider.ForceFlush(ctx); err != nil {
-			log.Printf("[WARN] Otel Exporter: Failed to force flush traces: %v", err)
+			slog.Warn("coretracer: otel exporter: failed to force flush traces", "error", err)
 		}
 
 		return exporter.Shutdown(ctx)

@@ -50,7 +50,7 @@ func TestTags_WithGlobalTags(t *testing.T) {
 	config = &Config{EnvName: "test_env"}
 	tags := NewTags(map[string]any{"key1": "value1"})
 	tags = tags.WithGlobalTags()
-	expected := map[string]any{"env": "test_env", "key1": "value1"}
+	expected := map[string]any{"deployment.environment": "test_env", "key1": "value1"}
 	require.Equal(t, expected, SafeMap(tags).Map(), "Expected Tags to include global tags")
 }
 

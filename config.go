@@ -1,7 +1,7 @@
 package coretracer
 
 import (
-	"log"
+	"log/slog"
 	"time"
 )
 
@@ -10,17 +10,20 @@ type Config struct {
 	EnvName               string
 	ServiceName           string
 	ServiceVersion        string
-	ChainID               string
+	ClusterID             string
 	CollectorDSN          string
 	CollectorSecureSSL    bool
+	CollectorHeaders      map[string]string
 	StuckFunctionWatchdog bool
 	StuckFunctionTimeout  time.Duration
 	Logger                BasicLogger
 }
 
 type BasicLogger interface {
-	Printf(format string, v ...any)
-	Println(v ...any)
+	Debug(msg string, args ...any)
+	Info(msg string, args ...any)
+	Warn(msg string, args ...any)
+	Error(msg string, args ...any)
 }
 
 // GlobalTagsMap returns an unsafe map of global tags.
@@ -37,8 +40,8 @@ func (c *Config) GlobalTagsMap() map[string]string {
 		globalTags["deployment.environment"] = c.EnvName
 	}
 
-	if len(c.ChainID) > 0 {
-		globalTags["deployment.chain_id"] = c.ChainID
+	if len(c.ClusterID) > 0 {
+		globalTags["deployment.cluster_id"] = c.ClusterID
 	}
 
 	if len(c.ServiceName) > 0 {
@@ -78,12 +81,12 @@ func validateConfig(cfg *Config) *Config {
 		cfg.ServiceVersion = "dev"
 	}
 
-	if len(cfg.ChainID) == 0 {
-		cfg.ChainID = "localnet-1337"
+	if len(cfg.ClusterID) == 0 {
+		cfg.ClusterID = "svc-us-east"
 	}
 
 	if cfg.Logger == nil {
-		cfg.Logger = log.Default()
+		cfg.Logger = slog.Default()
 	}
 
 	return cfg

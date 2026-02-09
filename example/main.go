@@ -14,12 +14,14 @@ import (
 )
 
 func main() {
+	log.Println("[Hello!] We expect some SigNoz OTEL collector listening on DSN localhost:4317")
+
 	coretracer.Enable(&coretracer.Config{
 		ServiceName:           "example",
 		ServiceVersion:        "1.0.0",
 		EnvName:               "dev",
 		CollectorDSN:          "localhost:4317",
-		ChainID:               "example-1337",
+		ClusterID:             "svc-us-east",
 		StuckFunctionTimeout:  10 * time.Second,
 		StuckFunctionWatchdog: true,
 	}, otel.InitExporter)

@@ -293,7 +293,7 @@ func TestGetStackFrames_UsefulFrameAfterBreakpointPackageCallFromRuntime(t *test
 				require.Equal(t, expectedStack[i], frame.Function)
 			}
 
-			recover()
+			_ = recover()
 		}()
 
 		panic("foo")
@@ -312,10 +312,10 @@ func TestGetCaller_DeepWrapWithRuntimeRecovers(t *testing.T) {
 					require.NotEmpty(t, frame.Function)
 					require.Equal(t, "github.com/InjectiveLabs/coretracer/stackcache.TestGetCaller_DeepWrapWithRuntimeRecovers.wrappedCall1.wrappedCall2.wrappedCall3.TestGetCaller_DeepWrapWithRuntimeRecovers.func1.func2.1.1", frame.Function)
 
-					recover()
+					_ = recover()
 				}()
 
-				recover()
+				_ = recover()
 				panic("foo 2")
 			}()
 

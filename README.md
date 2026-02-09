@@ -1,21 +1,18 @@
 # CoreTracer
 
 Welcome to CoreTracer! A package for tracing Go applications, re-invented with all recent insights on metrics collection and tracing.
-It is a spiritual successor of [InjectiveLabs/metrics](https://github.com/InjectiveLabs/metrics), [xlab/statsd_metrics](https://github.com/xlab/statsd_metrics), but we omit the "metrics" part to fully focus on tracing.
-
-Certain concepts are borrowed from the `metrics` package, but its API is redesigned to have very minimal surface and internal processing
-to leverage most of the [OpenTraicing](https://opentracing.io).
+It is a spiritual successor of [statsd metrics](https://github.com/InjectiveLabs/metrics), but with omitted "metrics" part to fully focus on tracing.
 
 CoreTracer is built around `go.opentelemetry.io/otel` package and its `Tracer` interface. Any Otel-compatible pipeline can be used to collect and aggregate the traces collected by this tool.
 
 We anticipate to use the following OTel receivers:
 
 - [OpenTelemetry Collector](https://opentelemetry.io/docs/collector/)
-- [Uptrace](https://uptrace.dev/)
+- [SigNoz](https://signoz.io/)
 - [Datadog](https://docs.datadoghq.com/tracing/)
 
-There are cerain ways to transform traces into metrics, a great article on this topic:
-https://newrelic.com/blog/nerdlog/transforming-traces
+There are certain ways to transform traces into metrics, a great article on this topic:
+<https://newrelic.com/blog/nerdlog/transforming-traces>
 
 [<img src="https://newrelic.com/sites/default/files/styles/1800w/public/2024-03/connector.webp?itok=fkc8qH1S" alt="Transforming Traces into Metrics" width="600" />](https://newrelic.com/blog/nerdlog/transforming-traces)
 
@@ -56,7 +53,7 @@ func (s *MyService) SomeOtherFunc(ctx context.Context) {
 }
 ```
 
-### Key points here:
+### Key points here
 
 - `coretracer.Trace` is used to initiate a span within a service method
 - `coretracer.TraceError` is used to end span, add the error and mark span as failed
@@ -65,18 +62,20 @@ func (s *MyService) SomeOtherFunc(ctx context.Context) {
 - `coretracer.WithTags` can add more tags to the existing span.
 
 The line `defer coretracer.Trace(&ctx)()` unfolds into the following runtime actions:
-* `Trace()` returns a `type SpanEnderFn func()` that ends span with a success and records the duration.
-* The end function is called when the method returns, so it's `defer`red.
-* We pass a pointer to the context inteface (`*context.Context`), so the context can be updated with the span data in-place.
-* The context is enriched with the span reference, so we can call `coretracer.TraceError` on the same context later.
-* Ending the span with `TraceError` will mark it as failed and add the error to the span, but also tombstone the context.
-* If the span ended with an error (and context is tombstoned), execution of the deferred `SpanEnderFn` function will be no-op.
-* If user calls `TraceError` on a tombstoned context, it will emit a warning with a stacktrace in the logs, considered a programming error.
-* Context could be a Cosmos SDK context, in that case the real Go context will be replaced in-place for `ctx.Context()`.
-* Passing `nil` context will emit a warning with a stacktrace in the logs, considered a programming error. Falls back to `Traceless` (see below).
-* We avoid panics to make sure a smooth transition from the old `metrics` package.
 
-### The trick with context in-place update:
+- `Trace()` returns a `type SpanEnderFn func()` that ends span with a success and records the duration.
+- The end function is called when the method returns, so it's `defer`red.
+- We pass a pointer to the context inteface (`*context.Context`), so the context can be updated with the span data in-place.
+- The context is enriched with the span reference, so we can call `coretracer.TraceError` on the same context later.
+- Ending the span with `TraceError` will mark it as failed and add the error to the span, but also tombstone the context.
+- If the span ended with an error (and context is tombstoned), execution of the deferred `SpanEnderFn` function will be no-op.
+- If user calls `TraceError` on a tombstoned context, it will emit a warning with a stacktrace in the logs, considered a programming error.
+- If user calls `TraceError` on a an empty or nil context, it will create a virtual span, e.g. via `TraceError(nil, err, tags)`
+- Passing `nil` context into `Trace` will emit a warning with a stacktrace in the logs, considered a programming error. Falls back to `Traceless` (see below).
+- We avoid panics to make sure a smooth transition from the old `metrics` package.
+
+### The trick with context in-place update
+
 ```go
 ctx := context.Background()
 fmt.Printf("pointer to context: %p\n", &ctx)
@@ -88,10 +87,10 @@ It allows to keep a single return value of `coretracer.Trace` that can be used t
 
 ### Summary about the basic usage
 
-* API surface must be minimal, user must only care about when methiod begins and when method fails.
-* Only 1 call to coretracer is needed to measure method duration and status.
-* Additional 1 call per erroring branch of code.
-* User needs to pass the context to be able to trace the sequence of calls.
+- API surface must be minimal, user must only care about when methiod begins and when method fails.
+- Only 1 call to coretracer is needed to measure method duration and status.
+- Additional 1 call per erroring branch of code.
+- User needs to pass the context to be able to trace the sequence of calls.
 
 ## Usage with additional tags
 
@@ -204,21 +203,22 @@ func (s *MyService) SomeFuncWithoutContext() error {
 ```
 
 Traceless won't care about the context that is `nil`. It will just create a span without prior context. If the context is set, it will be used to:
-* Fetch an existing span from the context, if span exists, `coretracer.Traceless` will act the same way as `coretracer.Trace`.
-* If span doesn't exist, it will create a new span sequence from the runtime call stack.
-* If the context is nil, it will not update the context with the span reference. Otherwise current span is set in the context.
+
+- Fetch an existing span from the context, if span exists, `coretracer.Traceless` will act the same way as `coretracer.Trace`.
+- If span doesn't exist, it will create a new span sequence from the runtime call stack.
+- If the context is nil, it will not update the context with the span reference. Otherwise current span is set in the context.
 
 ## Summary
 
-* `coretracer.Trace` is used to trace a method with a context.
-* `coretracer.Traceless` is used to trace a method without a context.
-* `coretracer.TraceWithName` is used to trace an anonymous closure with a given name.
-* `coretracer.TracelessWithName` is used to trace an anonymous closure without a context, with a given name.
-* `coretracer.Tags` is used to add tags to the span.
-* `coretracer.NewTags` is used to create a new set of tags.
-* `coretracer.NewTag` is a shortcut for `coretracer.NewTags`
-* `coretracer.WithTags` can add more tags to the existing span.
-* `coretracer.TraceError` is used to end span, set the error and mark span as failed.
+- `coretracer.Trace` is used to trace a method with a context.
+- `coretracer.Traceless` is used to trace a method without a context.
+- `coretracer.TraceWithName` is used to trace an anonymous closure with a given name.
+- `coretracer.TracelessWithName` is used to trace an anonymous closure without a context, with a given name.
+- `coretracer.Tags` is used to add tags to the span.
+- `coretracer.NewTags` is used to create a new set of tags.
+- `coretracer.NewTag` is a shortcut for `coretracer.NewTags`
+- `coretracer.WithTags` can add more tags to the existing span.
+- `coretracer.TraceError` is used to end span, set the error and mark span as failed.
 
 All tracing functions are here to collect as much info about call stack, associate tags and measure timing of function execution.
 They're designed to have very little overhead in terms of line code and runtime performance.
@@ -229,11 +229,14 @@ When enbled, the tracing info will be processed with OTal config and client and 
 
 ## Example
 
+Refer to the example's [main.go](example/main.go) for more details. The example will output the traces to local [SigNoz](https://signoz.io/docs/install/docker/) instance.
+
 ```bash
 cd example && go run main.go
-```
 
-Refer to the example's [main.go](example/main.go) for more details. The example will output the traces to local [SigNoz](https://signoz.io/docs/install/docker/) instance.
+[Hello!] We expect some SigNoz OTEL collector listening on DSN localhost:4317
+...
+```
 
 ## Tracing Config for OTel
 
@@ -241,7 +244,3 @@ Refer to the example's [main.go](example/main.go) for more details. The example 
 // TODO
 // Endpoints, Enabled, Env vars, default buffer size
 ```
-
-## License
-
-MIT

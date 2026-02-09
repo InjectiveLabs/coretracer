@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"runtime"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	otel "go.opentelemetry.io/otel"
@@ -18,6 +19,39 @@ import (
 const defaultStackSearchOffset = 1
 
 var _ Tracer = (*otelTracer)(nil)
+
+// captureErrorStackTrace captures the stack trace for error reporting,
+// skipping the specified number of frames
+func captureErrorStackTrace(skip int) string {
+	const maxDepth = 32
+	pcs := make([]uintptr, maxDepth)
+	n := runtime.Callers(skip, pcs)
+
+	if n == 0 {
+		return ""
+	}
+
+	frames := runtime.CallersFrames(pcs[:n])
+	var result strings.Builder
+
+	for {
+		frame, more := frames.Next()
+		if result.Len() > 0 {
+			result.WriteString("\n")
+		}
+		result.WriteString(frame.Function)
+		result.WriteString("\n\t")
+		result.WriteString(frame.File)
+		result.WriteString(":")
+		result.WriteString(fmt.Sprintf("%d", frame.Line))
+
+		if !more {
+			break
+		}
+	}
+
+	return result.String()
+}
 
 func newOtelTracer(cfg *Config) Tracer {
 	cfg = validateConfig(cfg)
@@ -55,8 +89,8 @@ func (t *otelTracer) Close() {
 func (t *otelTracer) Trace(ctx *context.Context, tags ...Tags) SpanEnderFn {
 	defer func() {
 		if r := recover(); r != nil {
-			t.logger.Printf("[PANIC] Trace() panicked - this is a bug: %v", r)
-			t.logger.Println(string(debug.Stack()))
+			t.logger.Error("coretracer: Trace() panicked - this is a bug", "panic", r)
+			t.logger.Error("coretracer: stack trace", "stack", string(debug.Stack()))
 		}
 	}()
 
@@ -67,38 +101,67 @@ func (t *otelTracer) Trace(ctx *context.Context, tags ...Tags) SpanEnderFn {
 }
 
 // TraceError implements Tracer.
-func (t *otelTracer) TraceError(ctx context.Context, err error) {
+func (t *otelTracer) TraceError(ctx context.Context, err error, tags ...Tags) {
 	defer func() {
 		if r := recover(); r != nil {
-			t.logger.Printf("[PANIC] TraceError() panicked - this is a bug: %v", r)
-			t.logger.Println(string(debug.Stack()))
+			t.logger.Error("coretracer: TraceError() panicked - this is a bug", "panic", r)
+			t.logger.Error("coretracer: stack trace", "stack", string(debug.Stack()))
 		}
 	}()
 
-	if ctx == nil {
+	if err == nil {
+		t.logger.Debug("coretracer: TraceError() called with nil error")
+		return
+	} else if ctx == nil {
 		ctx = context.Background()
 	}
 
+	var isNewSpan bool
 	span := oteltracer.SpanFromContext(ctx)
+
 	if span == nil {
-		t.logger.Println("[WARN] no span found in context - TraceError() with invalid context")
+		// Create a new virtual span if no span exists
+		frame := t.stackCache.GetCaller()
+		funcName := stackcache.FuncName(frame.Function)
+
+		t.logger.Debug("coretracer: TracelessError starts from", "function", funcName)
+
+		ctxPtr := &ctx
+		_ = t.traceStart(ctxPtr, funcName, true, tags)
+		span = oteltracer.SpanFromContext(*ctxPtr)
+		isNewSpan = true
+	} else if !span.IsRecording() {
 		return
 	}
 
-	if !span.IsRecording() {
-		return
+	span.SetStatus(otelcodes.Error, err.Error())
+	errorOpts := []oteltracer.EventOption{
+		// do not include stack trace provided by OpenTelemetry SDK,
+		// we'll set our own.
 	}
 
-	if err != nil {
-		span.SetStatus(otelcodes.Error, err.Error())
-	} else {
-		// prevent panic from a programming error when a wrong err value is passed
-		span.SetStatus(otelcodes.Error, "")
+	// isNewSpan already includes these tags
+	if len(tags) > 0 && !isNewSpan {
+		// Merge tags into attributes
+		allTags := NewTags().Union(tags...)
+		attributes := make([]otelattribute.KeyValue, 0, len(tags))
+		allTags.Range(func(k string, v any) bool {
+			attributes = append(attributes, anyToOtalAttribute(k, v))
+			return true
+		})
+		errorOpts = append(errorOpts, oteltracer.WithAttributes(attributes...))
 	}
 
-	span.RecordError(
-		err, oteltracer.WithStackTrace(true),
-	)
+	// Capture and trim stack trace to exclude internal frames
+	// Skip frames: runtime.Callers(0), captureErrorStackTrace(1), TraceError-otelTracer(2)
+	stackTrace := captureErrorStackTrace(3)
+	if stackTrace != "" {
+		errorOpts = append(errorOpts, oteltracer.WithAttributes(
+			otelattribute.String("exception.stacktrace", stackTrace),
+		))
+	}
+
+	span.RecordError(err, errorOpts...)
 
 	span.End()
 }
@@ -107,8 +170,8 @@ func (t *otelTracer) TraceError(ctx context.Context, err error) {
 func (t *otelTracer) TraceWithName(ctx *context.Context, name string, tags ...Tags) SpanEnderFn {
 	defer func() {
 		if r := recover(); r != nil {
-			t.logger.Printf("[PANIC] TraceWithName() panicked - this is a bug: %v", r)
-			t.logger.Println(string(debug.Stack()))
+			t.logger.Error("coretracer: TraceWithName() panicked - this is a bug", "panic", r)
+			t.logger.Error("coretracer: stack trace", "stack", string(debug.Stack()))
 		}
 	}()
 
@@ -119,15 +182,15 @@ func (t *otelTracer) TraceWithName(ctx *context.Context, name string, tags ...Ta
 func (t *otelTracer) Traceless(ctx *context.Context, tags ...Tags) SpanEnderFn {
 	defer func() {
 		if r := recover(); r != nil {
-			t.logger.Printf("[PANIC] Traceless() panicked - this is a bug: %v", r)
-			t.logger.Println(string(debug.Stack()))
+			t.logger.Error("coretracer: Traceless() panicked - this is a bug", "panic", r)
+			t.logger.Error("coretracer: stack trace", "stack", string(debug.Stack()))
 		}
 	}()
 
 	frame := t.stackCache.GetCaller()
 	funcName := stackcache.FuncName(frame.Function)
 
-	t.logger.Println("[DEBUG] Traceless() starts from", funcName)
+	t.logger.Debug("coretracer: Traceless() starts from", "function", funcName)
 
 	return t.traceStart(ctx, funcName, true, tags)
 }
@@ -136,8 +199,8 @@ func (t *otelTracer) Traceless(ctx *context.Context, tags ...Tags) SpanEnderFn {
 func (t *otelTracer) TracelessWithName(ctx *context.Context, name string, tags ...Tags) SpanEnderFn {
 	defer func() {
 		if r := recover(); r != nil {
-			t.logger.Printf("[PANIC] TracelessWithName() panicked - this is a bug: %v", r)
-			t.logger.Println(string(debug.Stack()))
+			t.logger.Error("coretracer: TracelessWithName() panicked - this is a bug", "panic", r)
+			t.logger.Error("coretracer: stack trace", "stack", string(debug.Stack()))
 		}
 	}()
 
@@ -273,14 +336,14 @@ func (t *otelTracer) callStackFramesToSpans(
 func (t *otelTracer) WithTags(ctx context.Context, tags ...Tags) {
 	defer func() {
 		if r := recover(); r != nil {
-			t.logger.Printf("[PANIC] WithTags() panicked - this is a bug: %v", r)
-			t.logger.Println(string(debug.Stack()))
+			t.logger.Error("coretracer: WithTags() panicked - this is a bug", "panic", r)
+			t.logger.Error("coretracer: stack trace", "stack", string(debug.Stack()))
 		}
 	}()
 
 	span := oteltracer.SpanFromContext(ctx)
 	if span == nil {
-		t.logger.Println("[WARN] no span found in context - WithTags() with invalid context")
+		t.logger.Warn("coretracer: no span found in context - WithTags() with invalid context")
 		return
 	}
 
@@ -301,62 +364,6 @@ func (t *otelTracer) SetCallStackOffset(offset int) {
 	}
 
 	t.callStackOffset = offset
-}
-
-type (
-	stacktracerSpanDone  struct{}
-	stacktracerSpanError struct{}
-	stacktracerSpanStuck struct{}
-)
-
-func tombstoneSpanCtxDone(ctx context.Context) context.Context {
-	return context.WithValue(ctx, stacktracerSpanDone{}, true)
-}
-
-func tombstoneSpanCtxError(ctx context.Context) context.Context {
-	return context.WithValue(ctx, stacktracerSpanError{}, true)
-}
-
-func tombstoneSpanCtxStuck(ctx context.Context) context.Context {
-	return context.WithValue(ctx, stacktracerSpanStuck{}, true)
-}
-
-func isTombstoneSpanCtxDone(ctx context.Context) bool {
-	return ctx.Value(stacktracerSpanDone{}) != nil
-}
-
-func isTombstoneSpanCtxError(ctx context.Context) bool {
-	return ctx.Value(stacktracerSpanError{}) != nil
-}
-
-func isTombstoneSpanCtxStuck(ctx context.Context) bool {
-	return ctx.Value(stacktracerSpanStuck{}) != nil
-}
-
-func (t *otelTracer) checkAndSetTombstoneSpanCtxDone(ctx context.Context) (context.Context, bool) {
-	if isTombstoneSpanCtxError(ctx) || isTombstoneSpanCtxStuck(ctx) {
-		// already tombstoned
-		return ctx, false
-	}
-
-	return tombstoneSpanCtxDone(ctx), true
-}
-
-func (t *otelTracer) checkAndSetTombstoneSpanCtxError(ctx context.Context) (context.Context, bool) {
-	if isTombstoneSpanCtxStuck(ctx) {
-		// already tombstoned as stuck
-		return ctx, false
-	} else if isTombstoneSpanCtxDone(ctx) {
-		// already tombstoned as done - this is a bug
-		t.logger.Println("[WARN] span context is already tombstoned as done - this is a bug")
-		return ctx, false
-	} else if isTombstoneSpanCtxError(ctx) {
-		// already tombstoned as error - this is a bug
-		t.logger.Println("[WARN] span context is already tombstoned as error - skipping double tombstoning")
-		return ctx, false
-	}
-
-	return tombstoneSpanCtxError(ctx), true
 }
 
 func anyToOtalAttribute(k string, v any) otelattribute.KeyValue {
